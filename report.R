@@ -1,0 +1,696 @@
+bank_loan = read.csv("https://www.louisaslett.com/Courses/MISCADA/bank_personal_loan.csv",header=TRUE)
+View(bank_loan)
+
+library("skimr")
+
+skim(bank_loan)
+table(bank_loan$Personal.Loan)
+
+#There seem to be some values for experience below 0 for people in 20s. This seems like a mistake in 
+negative_experience = bank_loan[bank_loan$Experience<0,]
+negative_experience
+cat("The unique values for negative experience: ", unique(negative_experience$Experience))
+#Set negative experience to absolute value.
+bank_loan[bank_loan$Experience<0,]$Experience = abs(bank_loan[bank_loan$Experience<0,]$Experience)
+#Check whether data modification worked
+cat("\nNumber of negative experiences now:", nrow(bank_loan[bank_loan$Experience<0,]))
+
+library(zipcodeR)
+library(stringr)
+library(tidyverse)
+num_unique_zipcodes = length(unique(bank_loan$ZIP.Code))
+paste("Number of unique zipcodes: ",num_unique_zipcodes)
+e_zips = list()
+counties = array(dim=5000)
+states = array(dim=5000)
+for(i in 1:length(bank_loan$ZIP.Code)){
+  out = tryCatch(
+    {
+      code = reverse_zipcode(bank_loan$ZIP.Code[i])
+      counties[i] = code$county
+      states[i] = code$state
+      FALSE
+    }, error=function(cond) {
+      TRUE
+    }, warning = function(warning_condition) {
+      TRUE
+    }
+  )
+  if(out){
+    e_zips = append(e_zips,zipcode)
+  }
+}
+bank_loan['County'] <- counties
+bank_loan['State'] <- states
+head(bank_loan)
+unique(e_zips)
+
+nrow(bank_loan[is.na(bank_loan$County),]) == nrow(bank_loan[is.na(bank_loan$State),])
+unique(bank_loan[is.na(bank_loan$County),]$ZIP.Code)
+
+#Some educated guesses for the missing County data
+bank_loan[bank_loan$ZIP.Code == 9307,]$County = "Ventura County"
+bank_loan[grepl(96651, bank_loan$ZIP.Code), ]$County = "Los Angeles County"
+bank_loan[grepl(92634, bank_loan$ZIP.Code), ]$County = "Orange County"
+bank_loan[grepl(92717, bank_loan$ZIP.Code), ]$County = "Orange County"
+bank_loan$County = gsub("\\s*\\w*$", "", bank_loan$County) #remove word County from end of county names
+unique(bank_loan[is.na(bank_loan$County),]) #check number of NA values in County column
+unique(bank_loan$County) #list unique County names
+
+# There are too many County choices so we will change merge them into regions according to https://en.wikipedia.org/wiki/Six_Californias
+Jef = str_split_1("Butte, Colusa, Del Norte, Glenn, Humboldt, Lake, Lassen, Mendocino, Modoc, Plumas, Shasta, Siskiyou, Tehama, Trinity",', ')
+N_Cal = str_split_1("Amador, El Dorado, Marin, Napa, Nevada, Placer, Sacramento, Sierra, Solano, Sonoma, Sutter, Yolo, Yuba",', ')
+S_Val = str_split_1("Alameda, Contra Costa, Monterey, San Benito, San Francisco, San Mateo, Santa Clara, Santa Cruz",", ")
+C_Cal = str_split_1("Alpine, Calaveras, Fresno, Inyo, Kern, Kings, Madera, Mariposa, Merced, Mono, San Joaquin, Stanislaus, Tulare, Tuolumne",', ')
+W_Cal = str_split_1("Los Angeles, San Luis Obispo, Santa Barbara, Ventura", ', ')
+S_Cal = str_split_1("Imperial, Orange, Riverside, San Bernardino, San Diego", ', ')
+
+#Add the regions column. Remove the County, State and Zip.Code columns as they are no longer useful
+bank_loan = bank_loan %>% 
+  mutate(Region = case_when(
+    County %in% N_Cal ~ "North California",
+    County %in% S_Cal ~ "South California",
+    County %in% C_Cal ~ "Central California",
+    County %in% Jef ~ "Jefferson",
+    County %in% W_Cal ~ "West California",
+    County %in% S_Val ~ "Silicon Valley",
+  ))  %>% 
+  select(-County,-ZIP.Code,-State)
+head(bank_loan)
+
+library("ggplot2")
+library("GGally")
+
+# We see that there is very high correlation between age and experience (0.994) so we can drop one of them
+# Income and CCAvg show high positive correlation
+# There is a large imbalance in the amount of data for declined PA as compared to accepted.
+bank_loan.cat = bank_loan
+bank_loan.cat
+bank_loan.cat$Personal.Loan = levels.pl[bank_loan.cat$Personal.Loan+1]
+ggpairs(bank_loan.cat %>% select(Age, Experience, Income, Mortgage,CCAvg, Family, Personal.Loan),
+        aes(color = (Personal.Loan)))
+
+library("ggforce")
+bank_loan.par <- bank_loan %>%
+  select(Personal.Loan, CD.Account, CreditCard, Online,Securities.Account,Education,Region) %>%
+  group_by(Personal.Loan, CD.Account, CreditCard, Online,Securities.Account,Education,Region) %>%
+  summarize(value = n())
+#
+bank_loan.par = bank_loan.par %>% 
+  mutate(Region = case_when(
+    Region == "North California" ~ "NC",
+    Region == "South California" ~ "SC",
+    Region == "Central California" ~ "CC",
+    Region == "Jefferson" ~ "Jeff",
+    Region == "West California" ~ "WC",
+    Region == "Silicon Valley" ~ "SV",
+  ))
+
+bank_loan.par
+levels.education = c("undergraduate", "graduate", "advanced")
+levels.pl = c("Declined","Accepted")
+levels.cd = c("No CD", "Has CD")
+levels.cc = c("No CC", "Has CC")
+levels.online = c("offline","online")
+levels.sa = c("No SA", "Has SA")
+#levels.fam = c("1","2","3","4")
+bank_loan.par$Education = levels.education[bank_loan.par$Education]
+bank_loan.par$Personal.Loan = levels.pl[bank_loan.par$Personal.Loan+1]
+bank_loan.par$CD.Account = levels.cd[bank_loan.par$CD.Account+1]
+bank_loan.par$Online = levels.online[bank_loan.par$Online+1]
+bank_loan.par$CreditCard = levels.cc[bank_loan.par$CreditCard+1]
+bank_loan.par$Securities.Account = levels.sa[bank_loan.par$Securities.Account+1]
+#bank_loan.par$Family = levels.fam[bank_loan.par$Family]
+# bank_loan.par$Family = as.factor(bank_loan$Family)
+bank_loan.par
+ggplot(bank_loan.par %>% gather_set_data(x = c(2:7)),
+       aes(x = x, id = id, split = y, value = value)) +
+  geom_parallel_sets(aes(fill = Personal.Loan),
+                     axis.width = 0.1,
+                     alpha = 0.66) + 
+  geom_parallel_sets_axes(axis.width = 0.15, fill = "lightgrey") + 
+  geom_parallel_sets_labels(angle = 0) +
+  coord_flip()
+
+colnames(bank_loan)
+barplot(bank_loan$Mortgage,col = (bank_loan$Personal.Loan+1))
+ggplot(bank_loan, aes(x=(Income),fill=as.factor(Personal.Loan))) + geom_density()
+ggplot(bank_loan, aes(x=as.factor(Family),color=as.factor(Personal.Loan))) + geom_bar()
+ggplot(bank_loan, aes(x=Region,color=as.factor(Personal.Loan))) + geom_bar()
+barplot(bank_loan$Income)
+mean(bank_loan$Family)
+#There is a need to standardise the results due to the difference in range of factors such as mortgage and CCAvg
+boxplot(bank_loan%>%select(CCAvg,Income,Mortgage,Age,Experience, Family))
+#One hot code the Categorical variables
+bank_loan.mod = bank_loan
+wc <- ifelse(bank_loan.mod$Region == 'West California', 1, 0)
+bank_loan.mod["West.California"] = wc
+sv <- ifelse(bank_loan.mod$Region == 'Silicon Valley', 1, 0)
+bank_loan.mod["Silicon.Valley"] = sv
+sc <- ifelse(bank_loan.mod$Region == 'South California', 1, 0)
+bank_loan.mod["South.California"] = sc
+ed.2 <- ifelse(bank_loan.mod$Education == 2, 1, 0)
+bank_loan.mod["Graduate"] = ed.2
+ed.3 <- ifelse(bank_loan.mod$Education == 3, 1, 0)
+bank_loan.mod["Advanced"] = ed.3
+qualitative = c("Age","Experience","Mortgage","Family","Income","CCAvg")
+bank_loan.mod[qualitative] = scale(bank_loan.mod[qualitative])
+
+bank_loan.mod = bank_loan.mod %>% select(-Region,-Education) #Remove obsolete columns
+bank_loan.mod$Personal.Loan = as.factor(bank_loan.mod$Personal.Loan)
+head(bank_loan.mod)
+#Split into train, validation and test
+library("rsample")
+set.seed(212) # by setting the seed we know everyone will see the same results
+# First get the training
+loan_split <- initial_split(bank_loan.mod)
+loan_train <- training(loan_split)
+# Then further split the training into validate and test
+loan_split2 <- initial_split(testing(loan_split), 0.5)
+loan_validate <- training(loan_split2)
+loan_test <- testing(loan_split2)
+
+library("keras")
+loan_train_x <- loan_train %>%
+  select(-Personal.Loan) %>%
+  as.matrix()
+loan_train_y <- loan_train %>%
+  select(Personal.Loan) %>%
+  as.matrix()
+loan_train_y = sapply(loan_train_y,as.numeric)
+loan_validate_x <- loan_validate %>%
+  select(-Personal.Loan) %>%
+  as.matrix()
+loan_validate_y <- loan_validate %>%
+  select(Personal.Loan) %>%
+  as.matrix()
+loan_validate_y = sapply(loan_validate_y,as.numeric)
+loan_test_x <- loan_test %>%
+  select(-Personal.Loan) %>%
+  as.matrix()
+loan_test_y <- loan_test %>%
+  select(Personal.Loan) %>%
+  as.matrix()
+loan_test_y = sapply(loan_test_y,as.numeric)
+
+#Some initial trial with GLM and LDA
+#Model training ...
+fit.lr <- glm(as.factor(Personal.Loan) ~ ., binomial, loan_train)
+summary(fit.lr)
+pred.lr <- predict(fit.lr, loan_validate, type = "response")
+y_hat.lr <- factor(ifelse(pred.lr > 0.5, 1, 0))
+accuracy.lr = mean(I(y_hat.lr == loan_validate_y))
+paste("logistic regression accuracy:", accuracy.lr)
+ggplot(data.frame(x = pred.lr), aes(x = x)) + geom_histogram()
+conf.mat <- table(`true accept` = loan_validate_y, `predict decline` = pred.lr > 0.5)
+conf.mat
+conf.mat/rowSums(conf.mat)*100
+
+fit.lda <- MASS::lda(Personal.Loan ~ ., loan_train)
+pred.lda <- predict(fit.lda, loan_validate)
+accuracy.lda = mean(I(loan_validate_y== pred.lda$class))
+paste("LDA accuracy:", accuracy.lda)
+conf.mat.lda <- table(`true accept` = loan_validate_y, `predict decline` = pred.lda$class)
+conf.mat.lda
+conf.mat.lda/rowSums(conf.mat.lda)*100
+
+library("data.table")
+library("mlr3verse")
+
+loan_task <- TaskClassif$new(id = "BankLoan",
+                             backend = rbind(loan_train,loan_validate), # <- NB: no na.omit() this time
+                             target = "Personal.Loan",
+                             positive = '1')
+cv5 <- rsmp("cv", folds = 5)
+cv5$instantiate(loan_task)
+
+set.seed(212)
+lrn_cart <- lrn("classif.rpart", predict_type = "prob") # CV enabled in rpart learner
+res_cart <- benchmark(data.table(
+  task       = list(loan_task),
+  learner    = list(lrn_cart),
+  resampling = list(cv5)
+), store_models = TRUE)
+
+res_cart$aggregate(list(msr("classif.ce"),
+                        msr("classif.acc"),
+                        msr("classif.auc"),
+                        msr("classif.fpr"),
+                        msr("classif.fnr")))
+trees <- res$resample_result(2)
+
+# Then, let's look at the tree from first CV iteration, for example:
+tree1 <- trees$learners[[1]]
+
+# This is a fitted rpart object, so we can look at the model within
+tree1_rpart <- tree1$model
+
+# If you look in the rpart package documentation, it tells us how to plot the
+# tree that was fitted
+plot(tree1_rpart, compress = TRUE, margin = 0.1)
+text(tree1_rpart, use.n = TRUE, cex = 0.8)
+
+set.seed(212)
+lrn_cart_cv <- lrn("classif.rpart", predict_type = "prob", xval = 10) # CV enabled in rpart learner
+
+res_cart_cv <- resample(loan_task, lrn_cart_cv, cv5, store_models = TRUE)
+rpart::plotcp(res_cart_cv$learners[[5]]$model)
+
+set.seed(212)
+lrn_baseline <- lrn("classif.featureless", predict_type = "prob") #baseline model to compare all other models' performance
+lrn_cart <- lrn("classif.rpart", predict_type = "prob") #Tree
+lrn_cart_cp <- lrn("classif.rpart", predict_type = "prob", cp = 0.012) # Tree with pruning
+
+lrn_xgboost <- lrn("classif.xgboost", predict_type = "prob")
+lrn_log_reg <- lrn("classif.log_reg", predict_type = "prob")
+pl_xgb <- po("encode") %>>%
+  po(lrn_xgboost)
+
+res <- benchmark(data.table(
+  task       = list(loan_task),
+  learner    = list(lrn_baseline,
+                    lrn_cart,
+                    lrn_cart_cp,
+                    lrn_xgboost,
+                    lrn_log_reg),
+  resampling = list(cv5)
+), store_models = TRUE)
+res
+res$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr")))
+
+set.seed(212) # set seed for reproducibility
+
+# Load data
+#data("bank_loan.mod", package = "modeldata")
+
+# Define task
+loan_task <- TaskClassif$new(id = "BankLoan",
+                             backend = rbind(loan_train,loan_validate),
+                             target = "Personal.Loan",
+                             positive = "1")
+
+# Cross validation resampling strategy
+cv5 <- rsmp("cv", folds = 5)
+cv5$instantiate(loan_task)
+new_spr_lrn = function(){
+  # Define a collection of base learners
+  lrn_baseline <- lrn("classif.featureless", predict_type = "prob")
+  lrn_cart     <- lrn("classif.rpart", predict_type = "prob")
+  lrn_cart_cp  <- lrn("classif.rpart", predict_type = "prob", cp = 0.012, id = "cartcp")
+  lrn_ranger   <- lrn("classif.ranger", predict_type = "prob")
+  lrn_xgboost  <- lrn("classif.xgboost", predict_type = "prob")
+  lrn_log_reg  <- lrn("classif.log_reg", predict_type = "prob")
+  
+  # Define a super learner
+  lrnsp_log_reg <- lrn("classif.log_reg", predict_type = "prob", id = "super")
+  
+  
+  # Factors coding pipeline
+  pl_factor <- po("encode")
+  
+  # Now define the full pipeline
+  spr_lrn <- gunion(list(
+    # First group of learners requiring no modification to input
+    gunion(list(
+      po("learner_cv", lrn_baseline),
+      po("learner_cv", lrn_cart),
+      po("learner_cv", lrn_cart_cp),
+      po("learner_cv", lrn_ranger),
+      po("learner_cv", lrn_log_reg)
+    )),
+    # Last group needing factor encoding
+    pl_factor %>>%
+      po("learner_cv", lrn_xgboost)
+  )) %>>%
+    po("featureunion") %>>%
+    po(lrnsp_log_reg)
+  
+  # This plot shows a graph of the learning pipeline
+  #spr_lrn$plot()
+}
+# Finally fit the base learners and super learner and evaluate
+spr_lrn = new_spr_lrn()
+res <- benchmark(data.table(
+  task       = list(loan_task),
+  learner    = list(lrn_baseline,
+                    lrn_cart,
+                    lrn_cart_cp,
+                    lrn_xgboost,
+                    lrn_log_reg,
+                    spr_lrn),
+  resampling = list(cv5)
+), store_models = TRUE)
+#res
+aggr = res$aggregate(list(msr("classif.ce"),
+                          msr("classif.acc"),
+                          msr("classif.auc"),
+                          msr("classif.fpr"),
+                          msr("classif.fnr")))
+aggr
+
+library(yardstick)
+loan_task_train <- TaskClassif$new(id = "BankLoan_Train",
+                                   backend = (loan_train),
+                                   target = "Personal.Loan",
+                                   positive = "1")
+loan_task_validate <- TaskClassif$new(id = "BankLoan_Validate",
+                                      backend = loan_validate,
+                                      target = "Personal.Loan",
+                                      positive = "1")
+
+plot_ROC = function(learner, name){
+  learner$train(loan_task_train)
+  prediction =learner$predict(loan_task_validate)
+  
+  auc <- yardstick::roc_auc_vec(factor(prediction$truth, levels = c("0","1")),
+                                as.numeric(prediction$response))
+  df = data.frame((prediction$prob),(prediction$truth))
+  colnames(df) = c("X1","X0","t")
+  
+  (yardstick::roc_curve(df,"t",'X1'))%>%
+    ggplot(aes(x = 1 - specificity, y = sensitivity, color=1-specificity)) +
+    geom_path() +
+    geom_abline(lty = 3) +
+    coord_equal() +
+    theme_bw()+ 
+    scale_colour_gradientn(colours=rainbow(10))
+}
+
+
+lrn_baseline2 <- mlr3::lrn("classif.featureless", predict_type = "prob")
+plot_ROC(lrn_baseline2,"Baseline")
+lrn_cart2 <- lrn("classif.rpart", predict_type = "prob")
+plot_ROC(lrn_cart2, "CART")
+lrn_cart_cp2  <- lrn("classif.rpart", predict_type = "prob", cp = 0.012, id = "cartcp")
+plot_ROC(lrn_cart_cp2,"CART pruned")
+lrn_ranger2   <- lrn("classif.ranger", predict_type = "prob")
+plot_ROC(lrn_ranger2,"Random Forest")
+lrn_xgboost2  <- lrn("classif.xgboost", predict_type = "prob")
+plot_ROC(lrn_xgboost2, "XGBoost")
+lrn_log_reg2  <- lrn("classif.log_reg", predict_type = "prob")
+plot_ROC(lrn_log_reg2,"Logistic Regression")
+
+set.seed(212) #RUN WITH SEED
+create_simple_nn = function(){
+  nn <- keras_model_sequential() %>%
+    layer_dense(units = 32, activation = "relu",
+                input_shape = c(ncol(loan_train_x))) %>%
+    layer_dense(units = 32, activation = "relu") %>%
+    layer_dense(units = 1, activation = "sigmoid")
+  return(nn)
+}
+# Have a look at it
+nn.rmsprop = create_simple_nn()
+nn.rmsprop %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("accuracy")
+)
+nn.sgd = create_simple_nn()
+nn.sgd %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_sgd(),
+  metrics = c("accuracy")
+)
+nn.adam = create_simple_nn()
+nn.adam %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = c("accuracy")
+)
+nn.ftrl = create_simple_nn()
+nn.ftrl %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_ftrl(),
+  metrics = c("accuracy")
+)
+nn.adagrad = create_simple_nn()
+nn.adagrad %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adagrad(),
+  metrics = c("accuracy")
+)
+# Finally, fit the neural network!  We provide the training data, and
+# also a list of validation data.  We can use this to monitor for
+# overfitting. See lectures regarding mini batches
+history_adagrad = nn.adagrad %>% fit(
+  loan_train_x, loan_train_y,
+  epochs = 50, batch_size = 32,
+  validation_data = list(loan_validate_x, loan_validate_y)
+)
+history_sgd = nn.sgd %>% fit(
+  loan_train_x, loan_train_y,
+  epochs = 50, batch_size = 32,
+  validation_data = list(loan_validate_x, loan_validate_y)
+)
+history_adam = nn.adam %>% fit(
+  loan_train_x, loan_train_y,
+  epochs = 50, batch_size = 32,
+  validation_data = list(loan_validate_x, loan_validate_y)
+)
+history_ftrl = nn.ftrl %>% fit(
+  loan_train_x, loan_train_y,
+  epochs = 50, batch_size = 32,
+  validation_data = list(loan_validate_x, loan_validate_y)
+)
+history_rmsprop = nn.rmsprop %>% fit(
+  loan_train_x, loan_train_y,
+  epochs = 50, batch_size = 32,
+  validation_data = list(loan_validate_x, loan_validate_y)
+)
+
+
+accuracy_df = data.frame(cbind(history_rmsprop$metrics$val_accuracy,
+                               history_ftrl$metrics$val_accuracy,
+                               history_adam$metrics$val_accuracy,
+                               history_sgd$metrics$val_accuracy,
+                               history_adagrad$metrics$val_accuracy))
+colnames(accuracy_df) = c("RMSprop","FTLR","Adam","SGD","AdaGrad")
+accuracy_df["Epoch"] = 1:50ggplot(accuracy_df, aes(x=Epoch)) +  
+  geom_line(aes(y = RMSprop, color = "RMSprop")) + 
+  geom_line(aes(y = FTLR, color="FTLR")) +
+  geom_line(aes(y = Adam, color = "Adam")) +
+  geom_line(aes(y = AdaGrad, color = "AdaGrad"))+
+  geom_line(aes(y = SGD, color = "SGD")) +
+  xlab("Epoch")+
+  ylab("Validation Accuracy") +
+  scale_color_manual(name='Optimizer',
+                     breaks=c('RMSprop', 'FTLR', 'Adam', "AdaGrad", "SGD"),
+                     values=c('RMSprop'= "darkred",
+                              'FTLR'="steelblue",
+                              'Adam'= "#FF9999",
+                              "AdaGrad"= "#FF3529",
+                              "SGD"= "#AACBBB"))
+accuracy_df
+
+create_nlayer_nn = function(num_hidden_layers,num_units=32,add_norm=FALSE){
+  dnn = keras_model_sequential() %>%
+    layer_dense(units = num_units, activation = "relu",
+                input_shape = c(ncol(loan_train_x)))
+  if(add_norm){
+    dnn = dnn %>%
+      layer_batch_normalization() %>%
+      layer_dropout(rate = 0.4)
+  }
+  for(i in 1:num_hidden_layers){
+    dnn = dnn  %>%
+      layer_dense(units = num_units, activation = "relu") 
+    if(add_norm){
+      dnn = dnn  %>%
+        layer_batch_normalization() %>%
+        layer_dropout(rate = 0.4)
+    }
+  }
+  dnn = dnn %>%
+    layer_dense(units = 1, activation = "sigmoid")
+  # Have a look at it
+  dnn %>% compile(
+    loss = "binary_crossentropy",
+    optimizer = optimizer_rmsprop(),
+    metrics=c("accuracy")
+  )
+}
+fit_nn = function(neural_net,train_x=NULL){
+  my_callbacks = c(
+    callback_early_stopping(monitor='val_loss', patience=2),
+    callback_reduce_lr_on_plateau()
+  )
+  neural_net %>% fit(
+    loan_train_x, loan_train_y,
+    epochs = 50, batch_size = 32,
+    validation_data = list(loan_validate_x, loan_validate_y),
+    callbacks = my_callbacks
+  )
+  if(!is.null(train_x)){
+    neural_net %>% fit(
+      train_x, loan_train_y,
+      epochs = 30, batch_size = 32,
+      validation_data = list(loan_validate_x, loan_validate_y),
+      callbacks = callback_reduce_lr_on_plateau()
+    )
+  }
+  # To get the probability predictions on the test set:
+  neural_net.prob <- neural_net %>% predict(loan_validate_x)
+  
+  # To get the raw classes (assuming 0.5 cutoff):
+  neural_net.res <- as.array(neural_net.prob %>% `>`(0.5) %>% k_cast("int32"))
+  table(neural_net.res, loan_validate_y)
+  nn_acc = yardstick::accuracy_vec(as.factor(loan_validate_y),
+                                   as.factor(neural_net.res))
+  nn_auc = yardstick::roc_auc_vec(factor(loan_validate_y, levels = c("1","0")),
+                                  c(neural_net.prob))
+  return(c(nn_acc,nn_auc))
+}
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.1 <- create_nlayer_nn(1)
+bank.dnn.1.metrics = fit_nn(bank.dnn.1)
+paste("Validation Accuracy:",bank.dnn.1.metrics[1]," AUC:",bank.dnn.1.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.2 <- create_nlayer_nn(2)
+bank.dnn.2.metrics = fit_nn(bank.dnn.2)
+paste("Validation Accuracy:",bank.dnn.2.metrics[1]," AUC:",bank.dnn.2.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.3 <- create_nlayer_nn(3)
+bank.dnn.3.metrics = fit_nn(bank.dnn.3)
+paste("Validation Accuracy:",bank.dnn.3.metrics[1]," AUC:",bank.dnn.3.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.4 <- create_nlayer_nn(4)
+bank.dnn.4.metrics = fit_nn(bank.dnn.4)
+paste("Validation Accuracy:",bank.dnn.4.metrics[1]," AUC:",bank.dnn.4.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.5 <- create_nlayer_nn(4,add_norm = TRUE)
+bank.dnn.5.metrics = fit_nn(bank.dnn.5)
+paste("Validation Accuracy:",bank.dnn.5.metrics[1]," AUC:",bank.dnn.5.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.6 <- create_nlayer_nn(4,num_units=64,add_norm=TRUE)
+bank.dnn.6.metrics = fit_nn(bank.dnn.6)
+paste("Validation Accuracy:",bank.dnn.6.metrics[1]," AUC:",bank.dnn.6.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.7 <- create_nlayer_nn(5,num_units=64,add_norm=TRUE)
+bank.dnn.7.metrics = fit_nn(bank.dnn.7)
+paste("Validation Accuracy:",bank.dnn.7.metrics[1]," AUC:",bank.dnn.7.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.8 <- create_nlayer_nn(5,num_units=128,add_norm=TRUE)
+bank.dnn.8.metrics = fit_nn(bank.dnn.8)
+paste("Validation Accuracy:",bank.dnn.8.metrics[1]," AUC:",bank.dnn.8.metrics[2])
+
+tensorflow::set_random_seed(212)
+bank.dnn.8.2 <- create_nlayer_nn(5,num_units=256,add_norm=TRUE)
+bank.dnn.8.2.metrics = fit_nn(bank.dnn.8.2)
+paste("Validation Accuracy:",bank.dnn.8.2.metrics[1]," AUC:",bank.dnn.8.2.metrics[2])
+
+tensorflow::set_random_seed(212) #RUN WITH SEED
+bank.dnn.9 <- create_nlayer_nn(4,num_units=128,add_norm=TRUE)
+bank.dnn.9.metrics = fit_nn(bank.dnn.9)
+paste("Validation Accuracy:",bank.dnn.9.metrics[1]," AUC:",bank.dnn.9.metrics[2])
+
+num_rows = dim(loan_train)[1]
+bank.dnn.16.metrics = 1:10
+for(i in 1:10){
+  loan_train_augment_x = loan_train_x
+  set.seed(212)
+  loan_train_augment_x[,1] = loan_train_x[,1] + rnorm(num_rows,mean=0,sd=i/100)
+  loan_train_augment_x[,2] = loan_train_x[,2] + rnorm(num_rows,mean=0,sd=i/100)
+  loan_train_augment_x[,3] = loan_train_x[,3] + rnorm(num_rows,mean=0,sd=i/100)
+  loan_train_augment_x[,5] = loan_train_x[,5] + rnorm(num_rows,mean=0,sd=i/100)
+  loan_train_augment_x[,6] = loan_train_x[,6] + rnorm(num_rows,mean=0,sd=i/100)
+  
+  tensorflow::set_random_seed(212)
+  bank.dnn.16 <- create_nlayer_nn(4,num_units=128,add_norm=TRUE)
+  bank.dnn.16.metrics[i] = fit_nn(bank.dnn.16,train_x = loan_train_augment_x)[2]  
+}
+bank.dnn.16.metrics
+
+paste("Best Gaussian noise standard deviation is ", which( bank.dnn.16.metrics==max(bank.dnn.16.metrics,na.rm=T) , arr.ind = TRUE )/100)
+
+num_rows = dim(loan_train)[1]
+loan_train_augment_x = loan_train_x
+set.seed(212)
+loan_train_augment_x[,1] = loan_train_x[,1] + rnorm(num_rows,mean=0,sd=0.02)
+loan_train_augment_x[,2] = loan_train_x[,2] + rnorm(num_rows,mean=0,sd=0.02)
+loan_train_augment_x[,3] = loan_train_x[,3] + rnorm(num_rows,mean=0,sd=0.02)
+loan_train_augment_x[,5] = loan_train_x[,5] + rnorm(num_rows,mean=0,sd=0.02)
+loan_train_augment_x[,6] = loan_train_x[,6] + rnorm(num_rows,mean=0,sd=0.02)
+
+tensorflow::set_random_seed(212)
+bank.dnn.10 <- create_nlayer_nn(4,num_units=64,add_norm=TRUE)
+bank.dnn.10.metrics = fit_nn(bank.dnn.10,train_x = loan_train_augment_x)
+paste("Validation Accuracy:",bank.dnn.10.metrics[1]," AUC:",bank.dnn.10.metrics[2])
+
+tensorflow::set_random_seed(212)
+bank.dnn.11 <- create_nlayer_nn(5,num_units=128,add_norm=TRUE)
+bank.dnn.11.metrics = fit_nn(bank.dnn.11,train_x = loan_train_augment_x)
+paste("Validation Accuracy:",bank.dnn.11.metrics[1]," AUC:",bank.dnn.11.metrics[2])
+
+tensorflow::set_random_seed(212)
+bank.dnn.12 <- create_nlayer_nn(6,num_units=128,add_norm=TRUE)
+bank.dnn.12.metrics = fit_nn(bank.dnn.12,train_x = loan_train_augment_x)
+paste("Validation Accuracy:",bank.dnn.12.metrics[1]," AUC:",bank.dnn.12.metrics[2])
+
+tensorflow::set_random_seed(212)
+bank.dnn.best <- create_nlayer_nn(4,num_units=128,add_norm=TRUE)
+bank.dnn.best.metrics = fit_nn(bank.dnn.best,train_x = loan_train_augment_x)
+paste("Validation Accuracy:",bank.dnn.best.metrics[1]," AUC:",bank.dnn.best.metrics[2])
+
+neural_net.prob_val <- bank.dnn.best %>% predict(loan_validate_x)
+
+pdat <- data.frame(y=(loan_validate_y),prob = neural_net.prob_val)
+plot(pdat$prob, pdat$y)
+abline(v=0.32)
+
+# To get the raw classes (assuming 0.5 cutoff):
+neural_net.res <- as.array(neural_net.prob_val %>% `>`(0.32) %>% k_cast("int32"))
+table(neural_net.res, loan_validate_y)
+nn_acc = yardstick::accuracy_vec(as.factor(loan_validate_y),
+                                 as.factor(neural_net.res))
+nn_auc = yardstick::roc_auc_vec(factor(loan_validate_y, levels = c("1","0")),
+                                c(neural_net.prob_val))
+paste("Test Accuracy:",nn_acc," AUC:",nn_auc)
+
+neural_net.prob <- bank.dnn.best %>% predict(loan_test_x)
+# To get the raw classes (assuming 0.5 cutoff):
+neural_net.res <- as.array(neural_net.prob %>% `>`(0.32) %>% k_cast("int32"))
+table(neural_net.res, loan_test_y)
+nn_acc = yardstick::accuracy_vec(as.factor(loan_test_y),
+                                 as.factor(neural_net.res))
+nn_auc = yardstick::roc_auc_vec(factor(loan_test_y, levels = c("1","0")),
+                                c(neural_net.prob))
+paste("Test Accuracy:",nn_acc," AUC:",nn_auc)
+
+pdat <- data.frame(y=(loan_test_y),prob = neural_net.prob)
+plot(pdat$prob, pdat$y)
+bins <- function(r,n) {
+  low <-  2 + floor(log(r/(n+1))/log(2))
+  high <- -1 - floor(log((n+1-r)/(n+1))/log(2))
+  i <- 2*r > n
+  low[i] <- high[i]
+  return(low)
+}
+bin_nums <- bins(rank(pdat$prob), length(pdat$prob))
+pgs <- split(pdat$prob, bin_nums)
+x <- unlist(lapply(pgs, mean))
+
+tgs <- split(pdat$y, bin_nums)
+y <- unlist(lapply(tgs, mean))
+
+df2 = data.frame(x=x,y=y)
+ggplot(df2,aes(x,y))+
+  geom_point(shape = 21, size = 2) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_line()+
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) +
+  xlab("Prediction Prob.") +
+  ylab("Real Probability") +
+  ggtitle("Best Neural Network Regression Calibration Plot")
